@@ -1,0 +1,58 @@
+//------------------------------------------------------------------------
+// 简称: FASOT_TQA_MID_888
+// 名称: 唐奇安测试-中轨
+// 类别: 策略应用
+// 类型: 用户应用
+// 输出: Void
+//------------------------------------------------------------------------
+Params
+    Integer tqaLenth(20);
+    Integer initCapital(500000);    // 初始化金额
+
+Vars
+    Series<Numeric> tqaHigh;
+    Series<Numeric> tqaLow;
+    Series<Numeric> tqaMinddle;
+
+Defs
+
+Events
+    OnInit()
+    {
+        //=========除权换月相关设置==============
+        AddDataFlag(Enum_Data_RolloverBackWard());    //设置后复权
+        AddDataFlag(Enum_Data_RolloverRealPrice());    //设置映射真实价格
+        AddDataFlag(Enum_Data_AutoSwapPosition());    //设置自动换仓
+        AddDataFlag(Enum_Data_IgnoreSwapSignalCalc());    //设置忽略换仓信号计算
+        //=========交易相关设置==============
+        SetInitCapital(initCapital);    //设置初始资金为10万
+        SetCommissionRate(BitOr(Enum_Rate_FreeOfExitToday,Enum_Rate_ByFillAmount), 3);    //设置手续费率为成交金额的2%%，不收平今， BitOr进行位或运算即设置属性和
+        SetSlippage(Enum_Rate_PointPerHand, 2);    //设置滑点为1跳/手
+    }
+
+
+    OnBar(ArrayRef<Integer> indexs)
+    {
+        tqaHigh = Highest(High, tqaLenth);
+        tqaLow = Lowest(Low, tqaLenth);
+        tqaMinddle = (tqaHigh + tqaLow) / 2;
+
+        if(tqaMinddle[1] > tqaMinddle[2] && MarketPosition != 1)
+        {
+            Buy(1, Open);
+        }else if(tqaMinddle[1] < tqaMinddle[2] && MarketPosition != -1)
+        {
+            SellShort(1, Open);
+        }
+
+        //PlotNumeric("tqaHigh", tqaHigh);
+        //PlotNumeric("tqaLow", tqaLow);
+        PlotNumeric("tqaMinddle", tqaMinddle, 0, Yellow);
+    }
+
+//------------------------------------------------------------------------
+// 编译版本    2026/4/13 225942
+// 版权所有    tba80123463123
+// 更改声明    TradeBlazer Software保留对TradeBlazer平台
+//            每一版本的TradeBlazer策略修改和重写的权利
+//------------------------------------------------------------------------

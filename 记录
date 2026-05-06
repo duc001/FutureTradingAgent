@@ -1,0 +1,31 @@
+一. 环境安装
+1. 安装 Homebrew（Mac的软件管家）
+    /bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"
+2. 安装 pyenv（Python版本管理）
+    brew install pyenv
+   编辑，通过终端 open ~/.zshrc 添加：
+    export PYENV_ROOT="$HOME/.pyenv"
+    export PATH="$PYENV_ROOT/bin:$PATH"
+    eval "$(pyenv init -)"
+   刷新文件
+    source ~/.zshrc
+3. 安装 Python 3.13
+    pyenv install 3.13.0  管理多个 Python 版本，随时切换
+    brew install python   安装系统级的单个软件/语言，只有一个版本
+    pyenv global 3.13.0   设置为默认 Python 版本
+
+
+4. Python语法
+    Python是动态类型,变量在赋值时自动推断类型,但类型仍然存在!;
+    必须统一使用4个空格或Tab(推荐空格);
+    冒号:表示代码块开始（代替{}）;
+    方法定义用def代替方法声明，-> str 是类型提示(可选,不强制)
+        没有public/private,用下划线约定:_private_method()
+    异常处理：
+        try:
+        except Exception as e:
+5. 常用数据：
+    DEEPSEEK_API_KEY = "sk-205ee372c5df491f8050324eb697e504"
+    DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+    model="deepseek-v4-pro",
+    model="deepseek-v4-flash",
