@@ -1,0 +1,17 @@
+# ChatDoc 智能体 - 依赖列表
+
+# 核心依赖（必需）
+sentence-transformers>=2.2.0
+numpy>=1.24.0
+chromadb>=0.4.0  # 向量数据库（推荐，替代 FAISS）
+
+# 文档解析（可选）
+PyPDF2>=3.0.0
+python-docx>=0.8.11
+
+# LLM 支持（可选）
+openai>=1.0.0
+requests>=2.31.0
+
+# 其他工具
+tqdm>=4.65.0
