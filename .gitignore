@@ -75,3 +75,9 @@ dmypy.json
 # Trading specific
 *.tqz
 *.tbl
+
+# Security - API Keys and sensitive config
+.env
+*.env
+.env.local
+DEEPSEEK_CONFIG.md
