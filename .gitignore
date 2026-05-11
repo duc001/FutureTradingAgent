@@ -81,3 +81,6 @@ dmypy.json
 *.env
 .env.local
 DEEPSEEK_CONFIG.md
+
+# Vector Database - contains embeddings with potential secrets
+chroma_db/
