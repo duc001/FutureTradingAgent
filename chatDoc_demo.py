@@ -1,4 +1,6 @@
 import os
+import glob
+import time
 
 os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '0'
@@ -6,40 +8,118 @@ os.environ['TRANSFORMERS_OFFLINE'] = '0'
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document as LangChainDocument
+from langchain_community.document_loaders import (
+    Docx2txtLoader,
+    PyPDFLoader,
+    UnstructuredExcelLoader,
+)
 
-from docx import Document as WordDocument
-from PyPDF2 import PdfReader
-from langchain_community.document_loaders import UnstructuredExcelLoader
+# 支持的文件扩展名
+SUPPORTED_EXTENSIONS = {
+    '.pdf': 'PDF 文档',
+    '.docx': 'Word 文档',
+    '.doc': 'Word 文档（旧版）',
+    '.xlsx': 'Excel 表格',
+    '.xls': 'Excel 表格（旧版）',
+    '.csv': 'CSV 数据',
+    '.txt': '文本文件',
+    '.md': 'Markdown 文档',
+}
+
+
+def scan_documents(directory="."):
+    """扫描目录下的可分析文件
+    
+    Args:
+        directory: 扫描目录路径
+    
+    Returns:
+        List[dict]: 文件信息列表，包含 path, name, ext, type
+    """
+    documents = []
+    
+    for ext, desc in SUPPORTED_EXTENSIONS.items():
+        pattern = os.path.join(directory, f"*{ext}")
+        files = glob.glob(pattern)
+        
+        for file_path in files:
+            # 跳过隐藏文件和临时文件
+            filename = os.path.basename(file_path)
+            if filename.startswith('.') or filename.startswith('~'):
+                continue
+            
+            documents.append({
+                'path': file_path,
+                'name': filename,
+                'ext': ext,
+                'type': desc
+            })
+    
+    # 按文件名排序
+    documents.sort(key=lambda x: x['name'].lower())
+    
+    return documents
+
+
+def display_documents(documents):
+    """展示文件列表
+    
+    Args:
+        documents: 文件信息列表
+    
+    Returns:
+        bool: 是否有文件
+    """
+    if not documents:
+        print("\n当前目录下未找到可分析的文件")
+        print(f"支持的格式: {', '.join(SUPPORTED_EXTENSIONS.keys())}")
+        return False
+    
+    print("\n" + "="*70)
+    print("发现以下可分析的文件：")
+    print("="*70)
+    
+    for idx, doc in enumerate(documents, 1):
+        print(f"  {idx:2d}. {doc['name']:40s} [{doc['type']}]")
+    
+    print("="*70)
+    print(f"共 {len(documents)} 个文件\n")
+    
+    return True
+
+
+# ==================== 配置区域 ====================
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-205ee372c5df491f8050324eb697e504")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_NAME = "deepseek-v4-flash"
 TEMPERATURE = 0.7
-FILE_NAME = "2026-test.docx"
-PDF_FILE = "2026-test.pdf"
-EXCEL_FILE = "跟踪止损策略回测数据_202605.xlsx"
 CHROMA_DB_PATH = "./chroma_db"
 COLLECTION_NAME = "chatdoc_collection"
 EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 
 
 class ChatDoc:
-    """统一文档读取器 - 支持 Word、PDF、Excel"""
+    """统一文档读取器 - 基于 LangChain（支持 Word、PDF、Excel）"""
 
+    # 文件扩展名映射到 (Loader类, 默认参数)
     READERS = {
-        '.docx': '_read_word',
-        '.pdf': '_read_pdf',
-        '.xlsx': '_read_excel',
-        '.xls': '_read_excel'
+        '.docx': (Docx2txtLoader, {}),
+        '.pdf': (PyPDFLoader, {}),
+        '.xlsx': (UnstructuredExcelLoader, {'mode': 'elements'}),
+        '.xls': (UnstructuredExcelLoader, {'mode': 'elements'}),
     }
 
-    def __init__(self, file_name=None):
+    def __init__(self, file_name):
         """初始化
 
         Args:
-            file_name: 文档路径
+            file_name: 文档路径（必需）
         """
-        self.file_name = file_name if file_name else FILE_NAME
+        if not file_name:
+            raise ValueError("文件路径不能为空")
+        
+        self.file_name = file_name
 
         if not os.path.exists(self.file_name):
             raise FileNotFoundError(f"文件不存在: {self.file_name}")
@@ -48,7 +128,9 @@ class ChatDoc:
         if ext not in self.READERS:
             raise ValueError(f"不支持的文件格式: {ext}\n支持的格式: {list(self.READERS.keys())}")
 
-        self.reader_method = self.READERS[ext]
+        # 动态创建 LangChain 加载器
+        LoaderClass, kwargs = self.READERS[ext]
+        self.loader = LoaderClass(self.file_name, **kwargs)
 
     def get_file_content(self):
         """获取文档内容（用于 RAG 处理）
@@ -56,43 +138,17 @@ class ChatDoc:
         Returns:
             List[LangChainDocument]: LangChain 文档对象列表，包含内容和元数据
         """
-        reader_func = getattr(self, self.reader_method)
-        return reader_func()
-
-    def _read_word(self):
-        """读取 Word 文档"""
-        doc = WordDocument(self.file_name)
-        text = "\n".join([para.text for para in doc.paragraphs])
-        return [LangChainDocument(
-            page_content=text,
-            metadata={"source": self.file_name, "type": "word"}
-        )]
-
-    def _read_pdf(self):
-        """读取 PDF 文档"""
-        reader = PdfReader(self.file_name)
-        documents = []
-
-        for page_num, page in enumerate(reader.pages, start=1):
-            page_text = page.extract_text()
-            if page_text:
-                doc = LangChainDocument(
-                    page_content=page_text,
-                    metadata={"source": self.file_name, "type": "pdf", "page": page_num}
-                )
-                documents.append(doc)
-
-        return documents
-
-    def _read_excel(self):
-        """读取 Excel 文档"""
-        loader = UnstructuredExcelLoader(self.file_name)
-        documents = loader.load()
-
+        documents = self.loader.load()
+        
+        if not documents:
+            print(f"警告: {self.file_name} 未提取到内容")
+            return []
+        
+        # 统一补充元数据（确保所有文档都有 source 字段）
         for doc in documents:
-            doc.metadata["source"] = self.file_name
-            doc.metadata["type"] = "excel"
-
+            if 'source' not in doc.metadata:
+                doc.metadata['source'] = self.file_name
+        
         return documents
 
     def split_data(self, chunk_size=800, chunk_overlap=100):
@@ -140,6 +196,10 @@ class ChatDoc:
         try:
             from langchain_huggingface import HuggingFaceEmbeddings
             embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+        except ImportError:
+            print("错误: 缺少 langchain-huggingface 包")
+            print("请运行: pip install langchain-huggingface sentence-transformers")
+            return None
         except Exception as e:
             print(f"模型加载失败: {e}")
             return None
@@ -373,7 +433,6 @@ class ChatDoc:
         Returns:
             str: LLM 生成的分析结果
         """
-        # 获取所有文档块
         all_docs = self.split_data(chunk_size=800, chunk_overlap=100)
         
         if not all_docs:
@@ -381,7 +440,6 @@ class ChatDoc:
         
         print(f"获取到 {len(all_docs)} 个文档块进行分析")
         
-        # 限制最大块数，避免超出 token 限制
         max_chunks = 20
         if len(all_docs) > max_chunks:
             print(f"文档块较多 ({len(all_docs)})，选取前 {max_chunks} 个关键块")
@@ -389,7 +447,6 @@ class ChatDoc:
         else:
             selected_docs = all_docs
         
-        # 构建完整上下文
         context_parts = []
         for i, doc in enumerate(selected_docs, 1):
             page_info = doc.metadata.get('page', '')
@@ -399,8 +456,6 @@ class ChatDoc:
             )
         
         full_context = "\n\n".join(context_parts)
-        
-        # 根据任务类型构建不同的 Prompt
         if is_statistics:
             system_prompt = """你是一个专业的数据分析专家，擅长从文档中提取统计信息和数据洞察。
 
@@ -444,64 +499,108 @@ class ChatDoc:
 ## 分析结果
 请按照上述要求，给出结构化的{task_description}结果："""
         
-        # 统一调用 _call_llm
         return self._call_llm(system_prompt, user_prompt, temperature, max_tokens=1500, task_name="全文分析")
 
 
 
-import time
+# ==================== 主程序 ====================
 
-test_file = EXCEL_FILE
-print("\nChatDoc RAG 系统测试")
-print(f"文件: {test_file} | 模型: {EMBEDDING_MODEL_NAME}")
-print("提示: 输入 'END' 结束程序\n")
-start_time = time.time()
-
-try:
-    chatdoc = ChatDoc(test_file)
-    print(f"加载成功: {chatdoc.file_name}")
+def main():
+    """主函数 - 交互式文档问答系统"""
+    print("\n" + "="*70)
+    print("ChatDoc RAG 智能文档问答系统")
+    print("="*70)
     
+    # 1. 扫描文档
+    documents = scan_documents(".")
+    
+    if not display_documents(documents):
+        print("\n程序退出")
+        return
+    
+    # 2. 用户选择文件
     while True:
-        query = input("\n请输入问题 (输入 END 结束): ").strip()
-        
-        if query.upper() == "END":
-            print("\n感谢使用，再见！")
-            break
-        
-        if not query:
-            continue
-        
-        print("\n" + "="*70)
-        print(f"问题: {query}")
-        print("="*70)
-        
-        search_methods = [
-            ("standard", "标准相似度搜索"),
-            ("score", "带分数搜索"),
-            ("mmr", "MMR 搜索")
-        ]
-        
-        for search_type, method_name in search_methods:
-            print(f"\n{'='*70}")
-            print(f"【{method_name}】")
-            print(f"{'='*70}")
+        try:
+            choice = input("请输入文件编号（输入 q 退出）: ").strip()
             
-            answer = chatdoc.chat_with_llm(query, top_k=6, search_type=search_type)
+            if choice.lower() == 'q':
+                print("\n感谢使用，再见！")
+                return
+            
+            if not choice.isdigit():
+                print("无效输入，请输入数字编号")
+                continue
+            
+            idx = int(choice) - 1
+            
+            if idx < 0 or idx >= len(documents):
+                print(f"无效编号，请输入 1-{len(documents)} 之间的数字")
+                continue
+            
+            selected_file = documents[idx]
+            break
+            
+        except KeyboardInterrupt:
+            print("\n\n程序被用户中断")
+            return
+        except Exception as e:
+            print(f"输入错误: {e}")
+            continue
+    
+    print(f"\n已选择: {selected_file['name']} [{selected_file['type']}]")
+    
+    # 3. 初始化 ChatDoc
+    start_time = time.time()
+    
+    try:
+        chatdoc = ChatDoc(selected_file['path'])
+        print(f"✓ 文件加载成功")
+        
+        # 4. 交互式问答
+        print("\n提示: 输入 'END' 或 'q' 结束问答，输入 'BACK' 返回文件选择\n")
+        
+        while True:
+            query = input("请输入问题: ").strip()
+            
+            if query.upper() in ['END', 'Q', 'QUIT', 'EXIT']:
+                print("\n感谢使用，再见！")
+                break
+            
+            if query.upper() == 'BACK':
+                print("\n返回文件选择...")
+                # 递归调用 main 重新选择文件
+                main()
+                return
+            
+            if not query:
+                continue
+            
+            print("\n" + "="*70)
+            print(f"问题: {query}")
+            print("="*70)
+            
+            # 使用标准检索方式
+            answer = chatdoc.chat_with_llm(query, top_k=6, search_type="standard")
             
             if answer:
-                print(f"\n✓ {method_name} 完成")
+                print("\n✓ 回答完成")
             else:
-                print(f"\n✗ {method_name} 未能获取回答")
+                print("\n✗ 未能获取回答")
+            
+            print("\n" + "="*70)
         
-        print("\n" + "="*70)
-        print("三种方式对比完成！可以继续提问或输入 END 结束。")
-        print("="*70)
+        total_time = time.time() - start_time
+        print(f"\n总会话耗时: {total_time:.2f}s")
+    
+    except FileNotFoundError as e:
+        print(f"\n错误: {e}")
+    except KeyboardInterrupt:
+        print("\n\n程序被用户中断")
+    except Exception as e:
+        print(f"\n异常: {e}")
+        import traceback
+        traceback.print_exc()
 
-    print(f"\n总耗时: {time.time() - start_time:.2f}s")
 
-except KeyboardInterrupt:
-    print("\n\n程序被用户中断")
-except Exception as e:
-    print(f"\n异常: {e}")
-    import traceback
-    traceback.print_exc()
+if __name__ == "__main__":
+    main()
