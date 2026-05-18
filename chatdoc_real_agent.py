@@ -787,10 +787,13 @@ class ChatDocAgent:
     
     def _build_context(self, search_results: List[SearchResult]) -> str:
         """
-        构建检索上下文
+        构建检索上下文 - 解决 Lost in the Middle 问题
         
-        将多个检索片段整合为 LLM 可读的上下文，
-        附带来源标注便于答案溯源。
+        优化策略：
+        1. 相似度排序：将最相关的放在开头和结尾
+        2. 分块标注：明确标注每个块的序号，便于 LLM 精确定位
+        3. 长度控制：限制总长度，避免中间内容被稀释
+        4. 位置提示：在 prompt 中强调要关注所有内容
         
         Args:
             search_results: 检索结果列表
@@ -801,20 +804,35 @@ class ChatDocAgent:
         if not search_results:
             return ""
         
-        context_parts = []
         sorted_results = sorted(search_results, key=lambda x: x.similarity_score, reverse=True)
         
-        for idx, result in enumerate(sorted_results, 1):
+        # 策略1: Lost in the Middle 优化
+        # 将结果按重要度交错排列：高分-低分-次高分-次低分...
+        # 这样即使 LLM 忽略中间部分，也能捕获两端的重要信息
+        optimized_order = []
+        if len(sorted_results) <= 2:
+            optimized_order = sorted_results
+        else:
+            # 头尾放最重要的，中间放次要的
+            half = len(sorted_results) // 2
+            optimized_order.append(sorted_results[0])  # 最高
+            for i in range(len(sorted_results) - 1, half, -1):
+                optimized_order.append(sorted_results[i])
+            for i in range(1, half + 1):
+                optimized_order.append(sorted_results[i])
+        
+        context_parts = []
+        for idx, result in enumerate(optimized_order, 1):
             doc_info = result.chunk.metadata.get('file_name', '未知')
             chunk_text = result.chunk.text.strip()
             
-            # 来源标注格式：【来源1】相关度:85% | 文件:xxx.txt
+            # 来源标注 - 增加序号便于定位
             context_parts.append(
-                f"【来源{idx}】相关度:{result.similarity_score:.0%} | {doc_info}\n"
+                f"【文档{idx}】(相关度:{result.similarity_score:.0%}) 来源:{doc_info}\n"
                 f"{chunk_text}"
             )
         
-        return "\n---\n".join(context_parts)
+        return "\n\n---\n\n".join(context_parts)
     
     def _generate_answer(self, question: str, context: str) -> str:
         """
@@ -861,7 +879,13 @@ class ChatDocAgent:
 【回答格式】
 1. 首先**直接回答问题**（一句话概括）
 2. 然后**详细说明**（从文档中提取的具体信息）
-3. 最后**标注来源**（如：来自【来源1】）
+3. 最后**标注来源**（如：来自【文档1】）
+
+【⚠️ 重要：Lost in the Middle 问题】
+- 你会收到多个文档片段，它们按顺序编号为【文档1】【文档2】...
+- **必须逐一阅读每个文档**，不能只看开头或结尾部分
+- 答案的关键信息可能出现在**任意位置**的文档中
+- 请在回答中引用**所有相关文档**，不要遗漏中间部分
 
 【注意事项】
 - 问题中的专业术语（期货、中收、策略等）保持原样

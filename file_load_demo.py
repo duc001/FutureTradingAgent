@@ -352,12 +352,14 @@ def load_and_split(file_path: str, chunk_size: int = 500, chunk_overlap: int = 5
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        add_start_index=True,
+        is_separator_regex=True,
+        length_function=len,
         separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]
     )
     
     # 3. 分割文档
     split_docs = splitter.split_documents(documents)
-    
     print(f"分割结果: {len(documents)} 个文档 -> {len(split_docs)} 个块")
     
     # 显示前几个块的统计信息
