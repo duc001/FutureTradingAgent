@@ -30,5 +30,7 @@
     model="deepseek-v4-pro",
     model="deepseek-v4-flash",
 
+    export DEEPSEEK_API_KEY="sk-205ee372c5df491f8050324eb697e504"
+
 6. Prompt：
 
