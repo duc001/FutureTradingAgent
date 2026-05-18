@@ -1,0 +1,228 @@
+//------------------------------------------------------------------------
+// 简称: FASOT_TRAILING_STOP_WITH_TIME
+// 名称: 跟踪止损策略附加交易时间
+// 类别: 策略应用
+// 类型: 用户应用
+// 输出: Void
+//------------------------------------------------------------------------
+/*
+* 买入，价格为P，最高价为H，H是买入后的最高价，那么平仓价为H-x。
+* 当平仓后，反向交易。
+* x表示最高价或最低价的止损点。
+* 这种能够更好的保证收益被回调（还有x个点被回调）。
+* 对于震荡行情无能为力，如果是大震荡的话，可以认为是一个小的趋势。对于小震荡就是频繁止损了。如果x设置的比较合理，那么能够忽略掉小的波动。
+* 添加开仓和平仓的时间限制，不隔夜
+
+* 附加功能点：
+* 1. 交易次数限制
+* 2. 超过涨跌幅度停止交易【历史K线计算涨跌幅复杂，暂停】
+* 3. 夜盘交易开关
+* 4. 把交易数据等关键数据放到单独一个文件，用于统计分析
+*/
+Params
+    Numeric lossPoint(1); // 浮动百分比
+    Integer bs(0); // 开仓方向 -1：空 1：多
+    Bool openDelay(TRUE); // 开盘等待 True：是 False：否
+    Bool closeClear(TRUE); // 尾盘平仓 True：是 False：否
+    Integer step(6); // K线步长
+    Integer maxTradeTimes(10); // 日最大交易次数
+
+Vars
+    Series<Numeric>  buyLoss;
+    Series<Numeric>  sellLoss;
+
+    Global Integer loss;
+    Global Integer direct;
+    Global Numeric currDate;
+    Global Integer tradeTimes;
+
+Defs
+    // 写入文件和打印
+    Integer ptf(String msg, Integer append){
+        fileName1 = "d:/tb3_log/"  + FormulaName() + "/" + Text(CurrentDate) + "/" + A_AccountID + "_"+ symbolD + "_all.tbf";
+        fileName2 = "d:/tb3_log/"  + FormulaName() + "/" + A_AccountID + "_"+ symbolD + "_record.tbf";
+        String context = Text(Date) +" "+ TimeToString(Time) + " "   + msg;
+        FileAppend(fileName1, context) ;
+        if(append >= 1){
+            FileAppend(fileName2, context);
+            Print(context);
+        }
+        return 0;
+    }
+
+    //是否开仓时间
+    Bool isOpenTime(){
+        if(!openDelay)
+        {
+            return true;
+        }
+        Bool b1 = (time >= 0.0905 && time <= 0.1500);
+        Bool b2 = (time >= 0.2105 && time <= 0.2300);
+        return (b1 || b2);
+    }
+
+    //是否尾盘平仓时间
+    Bool isClearTime(){
+        Bool b1 = (time >= 0.1458 && time <= 0.1500);
+        Bool b2 = (time >= 0.2258 && time <= 0.2300);
+        return (closeClear && (b1 || b2));
+    }
+
+    // 获取回撤数据
+    Numeric getLoss()
+    {
+        if(loss == 0)
+        {
+            loss = Open * lossPoint * 0.01;
+            prt("开盘价=" + Text(Open) + ", 止损倍率=" + Text(lossPoint) + ", 止损点数=" + Text(loss), 0);
+        }
+        Return loss;
+    }
+
+Events
+    OnInit()
+    {
+        //=========除权换月相关设置==============
+        AddDataFlag(Enum_Data_RolloverBackWard());    //设置后复权
+        AddDataFlag(Enum_Data_RolloverRealPrice());    //设置映射真实价格
+        AddDataFlag(Enum_Data_AutoSwapPosition());    //设置自动换仓
+        AddDataFlag(Enum_Data_IgnoreSwapSignalCalc());    //设置忽略换仓信号计算
+        //=========交易相关设置==============
+        SetInitCapital(500000);    //设置初始资金为100万
+        SetCommissionRate(BitOr(Enum_Rate_FreeOfExitToday,Enum_Rate_ByFillAmount), 0.1);    //设置手续费率为成交金额的5%%，不收平今， BitOr进行位或运算即设置属性和
+        SetSlippage(Enum_Rate_PointPerHand, 1);    //设置滑点为2跳/手
+        //buyLoss = 0;
+        //sellLoss = 99999;
+        loss = 0;
+    }
+
+    OnBar(ArrayRef<Integer> indexs)
+    {
+        // 1. 切日时，重置交易次数和止损点数
+        if(currDate != Date){
+            currDate = Date;
+            tradeTimes = 0;
+            loss = 0;
+            prt("--------", 1);
+            prt("换日：currDate=" + Text(currDate) + ",tradeTimes="+ Text(tradeTimes), 1);
+        }
+
+        // 2. 尾盘平仓时间
+        if(isClearTime)
+        {
+            if(MarketPosition > 0)
+            {
+                Sell(1, Close);
+                Commentary("尾盘平多");
+                prt("尾盘平多, price=" + Text(Close), 1);
+            } else if(MarketPosition < 0)
+            {
+                BuyToCover(1, Close);
+                Commentary("尾盘平空");
+                prt("尾盘平空, price=" + Text(Close), 1);
+            }
+
+            Return;
+        }
+
+        // 3. 开盘暂停时间判断
+        if(!isOpenTime)
+        {
+            prt("开盘暂停", 0);
+            Return;
+        }
+
+        // 4. 初始方向设置
+        if(direct == 0)
+        {
+            // 若K线使用1s的步长，则当前价格与step秒前价格比较
+            if(Close > Close[step])
+            {
+                direct = 1;
+            } else
+            {
+                direct = -1;
+            }
+            prt("初始Close=" + Text(Close) + " ,Close[step]=" + Text(Close[step]), 0);
+            prt("初始direct==0, 变更为direct=" + Text(direct), 1);
+        }
+
+        if(MarketPosition == 0){
+            // 重新获取仓位，空仓可买入
+            if(tradeTimes > maxTradeTimes){
+                prt("当日交易次数已达上限，不再交易", 0);
+                Return;
+            }
+
+            // 初始化交易
+            if(direct == 1)
+            {
+                Buy(1, Open);
+                buyLoss = H - getLoss();
+                sellLoss = C;
+                tradeTimes = tradeTimes + 1;
+                Commentary("初始买入，open=" + Text(Open) + " ,buyLoss=" + Text(buyLoss) + " ,tradeTimes=" + Text(tradeTimes));
+                prt("初始卖出，open=" + Text(Open) + " ,buyLoss=" + Text(buyLoss) + " ,tradeTimes=" + Text(tradeTimes), 1);
+            } else if(direct == -1){
+                SellShort(1, Open);
+                sellLoss = L + getLoss();
+                buyLoss = C;
+                tradeTimes = tradeTimes + 1;
+                Commentary("初始卖出，open=" + Text(Open) + " ,sellLoss=" + Text(sellLoss) + " ,tradeTimes=" + Text(tradeTimes));
+                prt("初始卖出，open=" + Text(Open) + " ,sellLoss=" + Text(sellLoss) + " ,tradeTimes=" + Text(tradeTimes), 1);
+            }
+        }else if(MarketPosition > 0){
+            // 多单
+            // 判断是否转向
+            if(Close[1] < buyLoss[1]){
+                prt("多单触发反向，Close[1]=" + Text(Close[1]) + " ,buyLoss[1]=" + Text(buyLoss[1]), 1);
+                if(tradeTimes > maxTradeTimes)
+                {
+                    Sell(1, Open);
+                    Commentary("交易限制，平多，open=" + Text(Open) + " ,sellLoss=" + Text(sellLoss) + " ,tradeTimes=" + Text(tradeTimes));
+                    prt("交易限制，平多，open=" + Text(Open) + " ,sellLoss=" + Text(sellLoss) + " ,tradeTimes=" + Text(tradeTimes), 1);
+                    Return;
+                }
+                SellShort(1, Open);
+                sellLoss = L + getLoss();
+                buyLoss = C;
+                tradeTimes = tradeTimes + 1;
+                Commentary("多->空，open=" + Text(Open) + " ,sellLoss=" + Text(sellLoss) + " ,tradeTimes=" + Text(tradeTimes));
+                prt("多->空，open=" + Text(Open) + " ,sellLoss=" + Text(sellLoss) + " ,tradeTimes=" + Text(tradeTimes), 1);
+            }else{
+                buyLoss = Max(buyLoss, H[1] - getLoss());
+                sellLoss = C;
+            }
+        }else{
+             // 空单
+             // 大于最低价Loss，转向
+             if(Close[1] > sellLoss[1]){
+                prt("空单触发反向，Close[1]=" + Text(Close[1]) + " ,sellLoss[1]=" + Text(sellLoss[1]), 1);
+                if(tradeTimes > maxTradeTimes)
+                {
+                    BuyToCover(1, Open);
+                    Commentary("交易限制，平空，price=" + Text(Open) + " ,tradeTimes=" + Text(tradeTimes));
+                    prt("交易限制，平空，price=" + Text(Open) + " ,tradeTimes=" + Text(tradeTimes), 1);
+                    Return;
+                }
+                Buy(1, Open);
+                buyLoss = H - getLoss();
+                sellLoss = C;
+                tradeTimes = tradeTimes + 1;
+                Commentary("空->多，open=" + Text(Open) + " ,buyLoss=" + Text(buyLoss) + " ,tradeTimes=" + Text(tradeTimes));
+                prt("空->多，open=" + Text(Open) + " ,buyLoss=" + Text(buyLoss) + " ,tradeTimes=" + Text(tradeTimes) ,1);
+             }else{
+                sellLoss = Min(sellLoss, L[1] + getLoss());
+                buyLoss = C;
+             }
+        }
+
+        PlotNumeric("buyLoss", buyLoss, 0, Yellow);
+        PlotNumeric("sellLoss", sellLoss, 0, White);
+    }
+//------------------------------------------------------------------------
+// 编译版本    2026/3/15 170559
+// 版权所有    tba80123463123
+// 更改声明    TradeBlazer Software保留对TradeBlazer平台
+//            每一版本的TradeBlazer策略修改和重写的权利
+//------------------------------------------------------------------------
