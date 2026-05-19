@@ -1,0 +1,55 @@
+//------------------------------------------------------------------------
+// 简称: FASOT_CCI_CROSS_888
+// 名称: CCI交叉
+// 类别: 策略应用
+// 类型: 用户应用
+// 输出: Void
+//------------------------------------------------------------------------
+Params
+    Numeric Length(14);
+    Numeric AvgLength(9);
+    Integer thresholdBuy(100);
+    Integer thresholdSell(-100);
+Vars
+    Series<Numeric> TmpValue;
+    Numeric Mean;
+    Numeric AvgDev;
+    Numeric Counter;
+    Series<Numeric> CCIValue;
+    Numeric CCIAvg;
+Events
+    OnBar(ArrayRef<Integer> indexs)
+    {
+        // 计算CCI
+        TmpValue = High + Low + Close;
+        Mean = AverageFC(TmpValue, Length);
+        AvgDev = 0;
+        for Counter = 0 to Length - 1
+        {
+            AvgDev = AvgDev + Abs(TmpValue[Counter] - Mean);
+        }
+        AvgDev = AvgDev / Length;
+
+        if(AvgDev == 0)
+            CCIValue = 0;
+        else
+            CCIValue = (TmpValue - Mean) / (0.015 * AvgDev);
+
+        CCIAvg = AverageFC(CCIValue, AvgLength);
+
+        // 交易信号
+        If(CrossOver(CCIValue, thresholdBuy))
+        {
+            Buy(1, Open);
+        }
+        If(CrossUnder(CCIValue, thresholdSell))
+        {
+            SellShort(1, Open);
+        }
+
+        // 可选绘图
+        PlotNumeric("CCI", CCIValue);
+        PlotNumeric("CCIAvg", CCIAvg);
+        PlotNumeric("OverSell",thresholdSell);
+        PlotNumeric("OverBuy",thresholdBuy);
+    }
