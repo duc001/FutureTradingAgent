@@ -17,6 +17,7 @@ requests>=2.31.0
 
 # 其他工具
 tqdm>=4.65.0
+pandas>=2.0.0  # 数据处理
 
 langchain-chroma
 langchain-huggingface
